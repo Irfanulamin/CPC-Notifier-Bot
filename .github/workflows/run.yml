@@ -1,0 +1,32 @@
+name: CP Notifier
+
+on:
+  schedule:
+    - cron: '0 * * * *'   # every hour
+    # Change to '0 0 * * *' for once daily at midnight UTC
+  workflow_dispatch:       # lets you trigger manually from the Actions tab
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run notifier
+        timeout-minutes: 5
+        env:
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
+          DISCORD_ROLE_ID: ${{ secrets.DISCORD_ROLE_ID }}
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          REMIND_BEFORE_MINUTES: '60,10'
+          ONE_SHOT: 'true'
+        run: python bot.py
