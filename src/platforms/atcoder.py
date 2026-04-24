@@ -1,13 +1,13 @@
 """
-AtCoder — scrapes the upcoming contests table from atcoder.jp/contests/
-The kenkoooo.com archive only contains past contests, not future ones.
-No auth required.
+AtCoder — uses clist.by API (free, requires API key).
+Sign up at https://clist.by to get a free API key.
+Add CLIST_USERNAME and CLIST_API_KEY to your .env and GitHub secrets.
 """
 
 import logging
-import re
 from datetime import datetime, timezone
 from typing import List
+import os
 
 import aiohttp
 
@@ -16,7 +16,7 @@ from src.platforms.base import BasePlatform
 
 log = logging.getLogger(__name__)
 
-URL = "https://atcoder.jp/contests/"
+API_URL = "https://clist.by/api/v4/contest/"
 
 
 class AtCoderClient(BasePlatform):
@@ -25,44 +25,52 @@ class AtCoderClient(BasePlatform):
     icon_url = "https://img.atcoder.jp/assets/favicon.png"
 
     async def fetch(self) -> List[Contest]:
+        api_key = os.environ.get("CLIST_API_KEY", "").strip()
+        username = os.environ.get("CLIST_USERNAME", "").strip()
+        if not api_key or not username:
+            log.warning("[AtCoder] CLIST_API_KEY or CLIST_USERNAME not set, skipping.")
+            return []
+
+        now = datetime.now(timezone.utc)
+        params = {
+            "resource": "atcoder.jp",
+            "order_by": "start",
+            "limit": 10,
+            "start__gt": now.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+        headers = {"Authorization": f"ApiKey {username}:{api_key}"}
+
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(
-                    URL,
-                    headers={"Accept-Language": "en-US,en;q=0.9"},
+                    API_URL,
+                    params=params,
+                    headers=headers,
                     timeout=aiohttp.ClientTimeout(total=15),
                 ) as resp:
-                    html = await resp.text()
+                    data = await resp.json(content_type=None)
+                    if resp.status != 200:
+                        log.error(f"[AtCoder] clist.by returned HTTP {resp.status}: {data}")
+                        return []
         except Exception as e:
-            log.error(f"[AtCoder] Failed to fetch contests page: {e}")
+            log.error(f"[AtCoder] Failed to fetch contests: {e}")
+            return []
+
+        if not data or "objects" not in data:
+            log.error(f"[AtCoder] Unexpected response: {data}")
             return []
 
         contests = []
-        now = datetime.now(timezone.utc)
-
-        upcoming_match = re.search(
-            r'id="contest-table-upcoming".*?</tbody>',
-            html,
-            re.DOTALL,
-        )
-        if not upcoming_match:
-            log.warning("[AtCoder] Could not find upcoming contests table in page HTML")
-            return []
-
-        table_html = upcoming_match.group(0)
-        rows = re.findall(r"<tr>(.*?)</tr>", table_html, re.DOTALL)
-
-        for row in rows:
-            cells = re.findall(r"<td[^>]*>(.*?)</td>", row, re.DOTALL)
-            if len(cells) < 3:
-                continue
-
-            time_match = re.search(r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2})', cells[0])
-            if not time_match:
-                continue
+        for c in data.get("objects", []):
             try:
-                start_time = datetime.fromisoformat(time_match.group(1)).astimezone(timezone.utc)
-            except Exception:
+                start_time = datetime.fromisoformat(
+                    c["start"].replace("Z", "+00:00")
+                ).astimezone(timezone.utc)
+                end_time = datetime.fromisoformat(
+                    c["end"].replace("Z", "+00:00")
+                ).astimezone(timezone.utc)
+            except Exception as e:
+                log.warning(f"[AtCoder] Failed to parse dates for {c}: {e}")
                 continue
 
             if start_time <= now:
@@ -70,21 +78,14 @@ class AtCoderClient(BasePlatform):
             if (start_time - now).days > 14:
                 continue
 
-            link_match = re.search(r'href="/contests/([^"]+)"[^>]*>([^<]+)<', cells[1])
-            if not link_match:
-                continue
-            contest_id = link_match.group(1).strip()
-            name = link_match.group(2).strip()
-
-            dur_match = re.search(r"(\d+)", re.sub(r"<[^>]+>", "", cells[2]))
-            duration_s = int(dur_match.group(1)) * 60 if dur_match else 0
+            duration_s = int((end_time - start_time).total_seconds())
 
             contests.append(
                 Contest(
-                    id=f"atcoder-{contest_id}",
+                    id=f"atcoder-{c.get('id')}",
                     platform=self.name,
-                    name=name,
-                    url=f"https://atcoder.jp/contests/{contest_id}",
+                    name=c.get("event", "Unknown Contest"),
+                    url=c.get("href", "https://atcoder.jp/contests/"),
                     start_time=start_time,
                     duration_seconds=duration_s,
                     color=self.color,

@@ -147,7 +147,7 @@ def _parse_contest(raw: dict, platform_name: str, color: int, icon_url: str, now
 class CodeChefClient(BasePlatform):
     name = "CodeChef"
     color = 0x5B4638
-    icon_url = "https://www.codechef.com/favicon.ico"
+    icon_url = "https://cdn.codechef.com/images/cc-logo.svg"
 
     ENDPOINTS = [
         "https://www.codechef.com/api/list/contests/future",
